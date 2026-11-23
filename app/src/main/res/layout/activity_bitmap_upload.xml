@@ -26,13 +26,13 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
-        <view class="com.android.benchmark.ui.BitmapUploadActivity$UploadView"
+        <view class="com.android.benchmark.ui.WorkloadViews$UploadView"
             android:id="@+id/upload_view"
             android:layout_width="match_parent"
             android:layout_height="match_parent"/>
     </androidx.cardview.widget.CardView>
 
-    <androidx.legacy.widget.Space
+    <View
         android:layout_height="10dp"
         android:layout_width="match_parent" />
 
@@ -41,7 +41,7 @@
         android:layout_height="0dp"
         android:layout_weight="1" />
 
-    <androidx.legacy.widget.Space
+    <View
         android:layout_height="10dp"
         android:layout_width="match_parent" />
 

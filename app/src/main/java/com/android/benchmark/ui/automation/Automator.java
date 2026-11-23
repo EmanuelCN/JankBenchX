@@ -16,266 +16,164 @@
 
 package com.android.benchmark.ui.automation;
 
-import android.annotation.TargetApi;
-import android.app.Instrumentation;
-import android.content.Context;
 import android.hardware.display.DisplayManager;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.Looper;
-import android.os.Message;
+import android.view.Choreographer;
 import android.view.Display;
-import android.view.FrameMetrics;
-import android.view.MotionEvent;
-import android.view.ViewTreeObserver;
+import android.view.View;
 import android.view.Window;
 
-import com.android.benchmark.results.GlobalResultsStore;
-import com.android.benchmark.results.UiBenchmarkResult;
+import com.android.benchmark.results.RunStore.Measurement;
 
-import java.util.LinkedList;
+import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
-@TargetApi(24)
-public class Automator extends HandlerThread
-        implements ViewTreeObserver.OnGlobalLayoutListener, CollectorThread.CollectorListener {
-    public static final long FRAME_PERIOD_MILLIS = 16;
+/** Runs one workload on the main thread and observes its window on a separate looper. */
+public final class Automator implements AutoCloseable {
+    private static final long WARMUP_NS = 250_000_000;
+    private static final long TIMEOUT_MS = 15_000;
+    private static final int MIN_FRAMES = 12;
 
-    private static final int PRE_READY_STATE_COUNT = 3;
-    private static final String TAG = "Benchmark.Automator";
-    private final AtomicInteger mReadyState;
+    public interface Workload extends AutoCloseable {
+        // Return true after making the last UI change for this iteration.
+        boolean advance(long elapsedNanos);
 
-    private AutomateCallback mCallback;
-    private Window mWindow;
-    private AutomatorHandler mHandler;
-    private CollectorThread mCollectorThread;
-    private int mRunId;
-    private int mIteration;
-    private String mTestName;
-
-    public static class AutomateCallback {
-        public void onAutomate() {}
-        public void onPostInteraction(List<FrameMetrics> metrics) {}
-        public void onPostAutomate() {}
-
-        protected final void addInteraction(Interaction interaction) {
-            if (mInteractions == null) {
-                return;
-            }
-
-            mInteractions.add(interaction);
-        }
-
-        protected final void setInteractions(List<Interaction> interactions) {
-            mInteractions = interactions;
-        }
-
-        private List<Interaction> mInteractions;
-    }
-
-    private static final class AutomatorHandler extends Handler {
-        public static final int MSG_NEXT_INTERACTION = 0;
-        public static final int MSG_ON_AUTOMATE = 1;
-        public static final int MSG_ON_POST_INTERACTION = 2;
-        private final String mTestName;
-        private final int mRunId;
-        private final int mIteration;
-
-        private Instrumentation mInstrumentation;
-        private volatile boolean mCancelled;
-        private CollectorThread mCollectorThread;
-        private AutomateCallback mCallback;
-        private Window mWindow;
-
-        LinkedList<Interaction> mInteractions;
-        private UiBenchmarkResult mResults;
-
-        AutomatorHandler(Looper looper, Window window, CollectorThread collectorThread,
-                         AutomateCallback callback, String testName, int runId, int iteration) {
-            super(looper);
-
-            mInstrumentation = new Instrumentation();
-
-            mCallback = callback;
-            mWindow = window;
-            mCollectorThread = collectorThread;
-            mInteractions = new LinkedList<>();
-            mTestName = testName;
-            mRunId = runId;
-            mIteration = iteration;
-        }
-
+        default boolean ready() { return true; }
+        default void prepare() {}
+        default List<Long> firstDrawsNs() { return Collections.emptyList(); }
         @Override
-        public void handleMessage(Message msg) {
-            if (mCancelled) {
+        default void close() {}
+    }
+
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Choreographer choreographer = Choreographer.getInstance();
+    public record Result(Measurement measurement, boolean retryable) {}
+
+    private final Window window;
+    private final View workloadView;
+    private final Workload workload;
+    private final Handler metricsHandler;
+    private final Runnable onTimingEnded;
+    private final Consumer<Result> result;
+    private final DisplayManager displays;
+    private final Choreographer.FrameCallback frameCallback = this::frame;
+    private long warmupStart = Long.MIN_VALUE;
+    private long startTime = Long.MIN_VALUE;
+    private FrameCapture collector;
+    private boolean closed;
+
+    private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
+        @Override public void onDisplayAdded(int id) {}
+        @Override public void onDisplayRemoved(int id) {}
+        @Override public void onDisplayChanged(int id) {
+            Display current = window.getDecorView().getDisplay();
+            if (collector != null && current != null && current.getDisplayId() == id) {
+                collector.setRefreshRate(current);
+            }
+        }
+    };
+
+    public Automator(Window window, View workloadView, Workload workload,
+                     Handler metricsHandler, Runnable onTimingEnded, Consumer<Result> result) {
+        this.window = window;
+        this.workloadView = workloadView;
+        this.workload = workload;
+        this.metricsHandler = metricsHandler;
+        this.onTimingEnded = onTimingEnded;
+        this.result = result;
+        displays = window.getContext().getSystemService(DisplayManager.class);
+    }
+
+    public void start() {
+        try {
+            if (!window.getDecorView().isHardwareAccelerated()) {
+                throw new IllegalStateException("Hardware-accelerated rendering is unavailable");
+            }
+            workload.prepare();
+            collector = new FrameCapture(window, metricsHandler);
+            collector.setRefreshRate(window.getDecorView().getDisplay());
+            displays.registerDisplayListener(displayListener, main);
+            main.postDelayed(() -> fail("Workload timed out"), TIMEOUT_MS);
+            choreographer.postFrameCallback(frameCallback);
+        } catch (RuntimeException e) {
+            fail(e.getMessage());
+        }
+    }
+
+    private void frame(long frameTime) {
+        try {
+            if (warmupStart == Long.MIN_VALUE) {
+                warmupStart = frameTime;
+            }
+            if (frameTime - warmupStart < WARMUP_NS) {
+                workloadView.invalidate();
+                choreographer.postFrameCallback(frameCallback);
                 return;
             }
-
-            switch (msg.what) {
-                case MSG_NEXT_INTERACTION:
-                    if (!nextInteraction()) {
-                        stopCollector();
-                        writeResults();
-                        mCallback.onPostAutomate();
-                    }
-                    break;
-                case MSG_ON_AUTOMATE:
-                    mCollectorThread.attachToWindow(mWindow);
-                    mCallback.setInteractions(mInteractions);
-                    mCallback.onAutomate();
-                    postNextInteraction();
-                    break;
-                case MSG_ON_POST_INTERACTION:
-                    List<FrameMetrics> collectedStats = (List<FrameMetrics>)msg.obj;
-                    persistResults(collectedStats);
-                    mCallback.onPostInteraction(collectedStats);
-                    postNextInteraction();
-                    break;
+            if (startTime == Long.MIN_VALUE) {
+                startTime = frameTime;
+                collector.begin(frameTime);
             }
-        }
-
-        public void cancel() {
-            mCancelled = true;
-            stopCollector();
-        }
-
-        private void stopCollector() {
-            mCollectorThread.quitCollector();
-        }
-
-        private boolean nextInteraction() {
-
-            Interaction interaction = mInteractions.poll();
-            if (interaction != null) {
-                doInteraction(interaction);
-                return true;
-            }
-            return false;
-        }
-
-        private void doInteraction(Interaction interaction) {
-            if (mCancelled) {
-                return;
-            }
-
-            mCollectorThread.markInteractionStart();
-
-            if (interaction.getType() == Interaction.Type.KEY_EVENT) {
-                for (int code : interaction.getKeyCodes()) {
-                    if (!mCancelled) {
-                        mInstrumentation.sendKeyDownUpSync(code);
-                    } else {
-                        break;
-                    }
-                }
+            if (workload.advance(frameTime - startTime)) {
+                collector.end(frameTime, capture -> main.post(() -> finish(capture)));
+                // A subsequent draw gives the timing listener an end marker outside the sample.
+                workloadView.postInvalidateOnAnimation();
+                // Start handoff UI in the next vsync, after the last measured frame.
+                workloadView.postOnAnimation(onTimingEnded);
             } else {
-                for (MotionEvent event : interaction.getEvents()) {
-                    if (!mCancelled) {
-                        mInstrumentation.sendPointerSync(event);
-                    } else {
-                        break;
-                    }
-                }
+                choreographer.postFrameCallback(frameCallback);
             }
-        }
-
-        protected void postNextInteraction() {
-            final Message msg = obtainMessage(AutomatorHandler.MSG_NEXT_INTERACTION);
-            sendMessage(msg);
-        }
-
-        private void persistResults(List<FrameMetrics> stats) {
-            if (stats.isEmpty()) {
-                return;
-            }
-
-            if (mResults == null) {
-                float refresh_rate = getFrameRate(mWindow.getContext());
-                mResults = new UiBenchmarkResult(stats, (int) refresh_rate);
-            } else {
-                mResults.update(stats);
-            }
-        }
-
-        private void writeResults() {
-            float refresh_rate = getFrameRate(mWindow.getContext());
-
-            GlobalResultsStore.getInstance(mWindow.getContext())
-                    .storeRunResults(mTestName, mRunId, mIteration, mResults, refresh_rate);
+        } catch (RuntimeException e) {
+            fail(e.getMessage());
         }
     }
 
-    private static float getFrameRate(Context context) {
-        final DisplayManager displayManager = context.getSystemService(DisplayManager.class);
-        Display display = displayManager.getDisplay(Display.DEFAULT_DISPLAY);
-        return display.getRefreshRate();
+    private void finish(FrameCapture.Capture capture) {
+        if (closed) {
+            return;
+        }
+        String error = null;
+        if (capture.dropped() > 0) {
+            error = "Android dropped frame timing reports during the capture";
+        } else if (capture.invalid() > 0) {
+            error = "Android supplied invalid frame timings during the capture";
+        } else if (!capture.confirmedEnd()) {
+            error = "Android did not report the end of the frame capture";
+        } else if (capture.frames().size() < MIN_FRAMES) {
+            error = "Too few frames were measured";
+        }
+        deliver(new Measurement(capture.frames(), capture.dropped(), capture.invalid(),
+                capture.fallback(), capture.lowHz(), capture.highHz(), error, capture.jank(),
+                workload.firstDrawsNs()), error != null);
     }
 
-    private void initHandler() {
-        mHandler = new AutomatorHandler(getLooper(), mWindow, mCollectorThread, mCallback,
-                mTestName, mRunId, mIteration);
-        mWindow = null;
-        mCallback = null;
-        mCollectorThread = null;
-        mTestName = null;
-        mRunId = 0;
-        mIteration = 0;
+    private void fail(String reason) {
+        deliver(new Measurement(Collections.emptyList(), 0, 0, 0, 0, 0,
+                reason == null || reason.trim().isEmpty() ? "Workload could not execute" : reason), false);
     }
 
-    @Override
-    public final void onGlobalLayout() {
-        if (!mCollectorThread.isAlive()) {
-            mCollectorThread.start();
-            mWindow.getDecorView().getViewTreeObserver().removeOnGlobalLayoutListener(this);
-            mReadyState.decrementAndGet();
+    private void deliver(Measurement measurement, boolean retryable) {
+        if (!closed) {
+            close();
+            result.accept(new Result(measurement, retryable));
         }
     }
 
     @Override
-    public void onCollectorThreadReady() {
-        if (mReadyState.decrementAndGet() == 0) {
-            initHandler();
-            postOnAutomate();
+    public void close() {
+        if (closed) {
+            return;
         }
-    }
-
-    @Override
-    protected void onLooperPrepared() {
-        if (mReadyState.decrementAndGet() == 0) {
-            initHandler();
-            postOnAutomate();
+        closed = true;
+        main.removeCallbacksAndMessages(null);
+        choreographer.removeFrameCallback(frameCallback);
+        workloadView.removeCallbacks(onTimingEnded);
+        if (collector != null) {
+            displays.unregisterDisplayListener(displayListener);
+            collector.close();
         }
-    }
-
-    @Override
-    public void onPostInteraction(List<FrameMetrics> stats) {
-        Message m = mHandler.obtainMessage(AutomatorHandler.MSG_ON_POST_INTERACTION, stats);
-        mHandler.sendMessage(m);
-    }
-
-    protected void postOnAutomate() {
-        final Message msg = mHandler.obtainMessage(AutomatorHandler.MSG_ON_AUTOMATE);
-        mHandler.sendMessage(msg);
-    }
-
-    public void cancel() {
-        mHandler.removeMessages(AutomatorHandler.MSG_NEXT_INTERACTION);
-        mHandler.cancel();
-        mHandler = null;
-    }
-
-    public Automator(String testName, int runId, int iteration,
-                     Window window, AutomateCallback callback) {
-        super("AutomatorThread");
-
-        mTestName = testName;
-        mRunId = runId;
-        mIteration = iteration;
-        mCallback = callback;
-        mWindow = window;
-        mWindow.getDecorView().getViewTreeObserver().addOnGlobalLayoutListener(this);
-        mCollectorThread = new CollectorThread(this);
-        mReadyState = new AtomicInteger(PRE_READY_STATE_COUNT);
+        workload.close();
     }
 }

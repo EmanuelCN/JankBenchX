@@ -17,437 +17,377 @@
 package com.android.benchmark.app;
 
 import android.content.Intent;
-import android.os.AsyncTask;
+import android.content.res.ColorStateList;
 import android.os.Bundle;
 import android.os.Handler;
-import androidx.fragment.app.FragmentManager;
-import androidx.fragment.app.FragmentTransaction;
-import androidx.fragment.app.ListFragment;
-import androidx.appcompat.app.AppCompatActivity;
+import android.os.HandlerThread;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
-import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewGroup;
-import android.widget.BaseAdapter;
-import android.widget.ListView;
+import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.android.benchmark.R;
-import com.android.benchmark.api.JankBenchAPI;
-import com.android.benchmark.config.Constants;
-import com.android.benchmark.registry.BenchmarkGroup;
-import com.android.benchmark.registry.BenchmarkRegistry;
-import com.android.benchmark.results.GlobalResultsStore;
-import com.android.benchmark.results.UiBenchmarkResult;
-import com.android.benchmark.synthetic.MemoryActivity;
-import com.android.benchmark.ui.BitmapUploadActivity;
-import com.android.benchmark.ui.EditTextInputActivity;
-import com.android.benchmark.ui.FullScreenOverdrawActivity;
-import com.android.benchmark.ui.ImageListViewScrollActivity;
-import com.android.benchmark.ui.ListViewScrollActivity;
-import com.android.benchmark.ui.ShadowGridActivity;
-import com.android.benchmark.ui.TextScrollActivity;
+import androidx.activity.OnBackPressedCallback;
 
-import org.apache.commons.math3.stat.descriptive.SummaryStatistics;
+import com.android.benchmark.R;
+import com.android.benchmark.results.RunStore;
+import com.android.benchmark.results.RunStore.Measurement;
+import com.android.benchmark.results.RunStore.Status;
+import com.android.benchmark.ui.BenchmarkTest;
+import com.android.benchmark.ui.WorkloadViews;
+import com.android.benchmark.ui.WorkloadViews.Scene;
+import com.android.benchmark.ui.automation.Automator;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.List;
 
-public class RunLocalBenchmarksActivity extends AppCompatActivity {
-
-    public static final int RUN_COUNT = 5;
-
-    private ArrayList<LocalBenchmark> mBenchmarksToRun;
-    private int mBenchmarkCursor;
-    private int mCurrentRunId;
-    private boolean mFinish;
-
-    private Handler mHandler = new Handler();
-
-    private static final int[] ALL_TESTS = new int[] {
-            R.id.benchmark_list_view_scroll,
-            R.id.benchmark_image_list_view_scroll,
-            R.id.benchmark_shadow_grid,
-            R.id.benchmark_text_high_hitrate,
-            R.id.benchmark_text_low_hitrate,
-            R.id.benchmark_edit_text_input,
-            R.id.benchmark_overdraw,
-            R.id.benchmark_bitmap_upload,
-    };
-
-    public static class LocalBenchmarksList extends ListFragment {
-        private ArrayList<LocalBenchmark> mBenchmarks;
-        private int mRunId;
-
-        public void setBenchmarks(ArrayList<LocalBenchmark> benchmarks) {
-            mBenchmarks = benchmarks;
-        }
-
-        public void setRunId(int id) {
-            mRunId = id;
-        }
-
-        @Override
-        public void onListItemClick(ListView l, View v, int position, long id) {
-            if (getActivity().findViewById(R.id.list_fragment_container) != null) {
-                FragmentManager fm = getActivity().getSupportFragmentManager();
-                UiResultsFragment resultsView = new UiResultsFragment();
-                String testName = BenchmarkRegistry.getBenchmarkName(v.getContext(),
-                        mBenchmarks.get(position).id);
-                resultsView.setRunInfo(testName, mRunId);
-                FragmentTransaction fragmentTransaction = fm.beginTransaction();
-                fragmentTransaction.replace(R.id.list_fragment_container, resultsView);
-                fragmentTransaction.addToBackStack(null);
-                fragmentTransaction.commit();
-            }
-        }
-    }
-
-
-    private class LocalBenchmark {
-        int id;
-        int runCount = 0;
-        int totalCount = 0;
-        ArrayList<String> mResultsUri = new ArrayList<>();
-
-        LocalBenchmark(int id, int runCount) {
-            this.id = id;
-            this.runCount = 0;
-            this.totalCount = runCount;
-        }
-
-    }
+public class RunLocalBenchmarksActivity extends Screen {
+    static final String TESTS = "tests";
+    static final String REPETITIONS = "repetitions";
+    private static final String RUN_ID = "run-id";
+    private static final long SETTLE_MS = 350;
+    private static final long CAPTURE_RETRY_DELAY_MS = 500;
+    private static final long START_TIMEOUT_MS = 7_000;
+    private static final long BETWEEN_STEPS_MS = 80;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Runnable launchStep = this::startStep;
+    private final Runnable beginCapture = this::beginCapture;
+    private final List<BenchmarkTest> tests = new ArrayList<>();
+    private long runId;
+    private int repetitions;
+    private int position;
+    private long readyDeadline;
+    private boolean resumed;
+    private boolean focused;
+    private boolean finishingOnDisk;
+    private boolean resultReady;
+    private boolean savingStep;
+    private boolean retryingCapture;
+    private boolean destroyed;
+    private Status ending;
+    private String endingReason;
+    private FrameLayout holder;
+    private TextView workloadName;
+    private TextView progressLabel;
+    private ProgressBar progress;
+    private View cancelButton;
+    private Scene scene;
+    private Automator automator;
+    private HandlerThread metricsThread;
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_running_list);
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        LinearLayout screen = createScreen();
+        LinearLayout header = column();
+        header.setPadding(dp(20), dp(16), dp(20), dp(10));
+        header.setBackgroundColor(surface);
+        LinearLayout bar = row();
+        progressLabel = text("Preparing benchmark", 14, muted, true);
+        progressLabel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        bar.addView(progressLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        cancelButton = action("Cancel", false);
+        cancelButton.setOnClickListener(view -> end(Status.CANCELLED, "Cancelled by the user."));
+        bar.addView(cancelButton);
+        header.addView(bar);
+        workloadName = text("JankBenchX", 20, ink, true);
+        header.addView(workloadName);
+        space(header, 8);
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setId(android.R.id.progress);
+        ColorStateList progressColor = ColorStateList.valueOf(primary);
+        progress.setProgressTintList(progressColor);
+        progress.setIndeterminateTintList(progressColor);
+        progress.setIndeterminate(true);
+        header.addView(progress, new LinearLayout.LayoutParams(-1, dp(7)));
+        screen.addView(header);
 
-        initLocalBenchmarks(getIntent());
+        holder = new FrameLayout(this) {
+            @Override public boolean onInterceptTouchEvent(MotionEvent event) { return true; }
+            @Override public boolean onTouchEvent(MotionEvent event) { return true; }
+        };
+        holder.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        holder.setClipChildren(true);
+        screen.addView(holder, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        if (findViewById(R.id.list_fragment_container) != null) {
-            FragmentManager fm = getSupportFragmentManager();
-            LocalBenchmarksList listView = new LocalBenchmarksList();
-            listView.setListAdapter(new LocalBenchmarksListAdapter(LayoutInflater.from(this)));
-            listView.setBenchmarks(mBenchmarksToRun);
-            listView.setRunId(mCurrentRunId);
-            fm.beginTransaction().add(R.id.list_fragment_container, listView).commit();
-        }
-
-        TextView scoreView = (TextView) findViewById(R.id.score_text_view);
-        scoreView.setText("Running tests!");
-    }
-
-    private int translateBenchmarkIndex(int index) {
-        if (index >= 0 && index < ALL_TESTS.length) {
-            return ALL_TESTS[index];
-        }
-
-        return -1;
-    }
-
-    private void initLocalBenchmarks(Intent intent) {
-        mBenchmarksToRun = new ArrayList<>();
-        int[] enabledIds = intent.getIntArrayExtra(BenchmarkGroup.BENCHMARK_EXTRA_ENABLED_TESTS);
-        int runCount = intent.getIntExtra(BenchmarkGroup.BENCHMARK_EXTRA_RUN_COUNT, RUN_COUNT);
-        mFinish = intent.getBooleanExtra(BenchmarkGroup.BENCHMARK_EXTRA_FINISH, false);
-
-        if (enabledIds == null) {
-            // run all tests
-            enabledIds = ALL_TESTS;
-        }
-
-        StringBuilder idString = new StringBuilder();
-        idString.append(runCount);
-        idString.append(System.currentTimeMillis());
-
-        for (int i = 0; i < enabledIds.length; i++) {
-            int id = enabledIds[i];
-            System.out.println("considering " + id);
-            if (!isValidBenchmark(id)) {
-                System.out.println("not valid " + id);
-                id = translateBenchmarkIndex(id);
-                System.out.println("got out " + id);
-                System.out.println("expected: " + R.id.benchmark_overdraw);
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                end(Status.CANCELLED, "Cancelled by the user.");
             }
+        });
+        if (state != null) {
+            runId = state.getLong(RUN_ID);
+            if (runId == 0) {
+                finish();
+            } else {
+                end(Status.CANCELLED, "The benchmark screen was interrupted.");
+            }
+            return;
+        }
 
-            if (isValidBenchmark(id)) {
-                int localRunCount = runCount;
-                if (isCompute(id)) {
-                    localRunCount = 1;
+        String[] selected = getIntent().getStringArrayExtra(TESTS);
+        if (selected != null) {
+            for (String name : selected) {
+                BenchmarkTest test = BenchmarkTest.valueOf(name).canonical();
+                if (test.isSupported(this)) {
+                    tests.add(test);
                 }
-                mBenchmarksToRun.add(new LocalBenchmark(id, localRunCount));
-                idString.append(id);
             }
         }
-
-        mBenchmarkCursor = 0;
-        mCurrentRunId = idString.toString().hashCode();
-    }
-
-    private boolean isCompute(int id) {
-        switch (id) {
-            case R.id.benchmark_cpu_gflops:
-            case R.id.benchmark_cpu_heat_soak:
-            case R.id.benchmark_memory_bandwidth:
-            case R.id.benchmark_memory_latency:
-            case R.id.benchmark_power_management:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private static boolean isValidBenchmark(int benchmarkId) {
-        switch (benchmarkId) {
-            case R.id.benchmark_list_view_scroll:
-            case R.id.benchmark_image_list_view_scroll:
-            case R.id.benchmark_shadow_grid:
-            case R.id.benchmark_text_high_hitrate:
-            case R.id.benchmark_text_low_hitrate:
-            case R.id.benchmark_edit_text_input:
-            case R.id.benchmark_overdraw:
-            case R.id.benchmark_bitmap_upload:
-            case R.id.benchmark_memory_bandwidth:
-            case R.id.benchmark_memory_latency:
-            case R.id.benchmark_power_management:
-            case R.id.benchmark_cpu_heat_soak:
-            case R.id.benchmark_cpu_gflops:
-                return true;
-            default:
-                return false;
-        }
+        repetitions = getIntent().getIntExtra(REPETITIONS, 5);
+        progress.setMax(tests.size() * repetitions);
+        RunStore store = RunStore.get(this);
+        RunStore.DISK.execute(() -> {
+            try {
+                long id = store.start(tests, repetitions);
+                main.post(() -> {
+                    runId = id;
+                    if (ending != null) {
+                        finishOnDisk();
+                    } else {
+                        scheduleStep();
+                    }
+                });
+            } catch (RuntimeException error) {
+                main.post(() -> storageError("Could not start the benchmark.", error));
+            }
+        });
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        mHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                runNextBenchmark();
-            }
-        }, 1000);
-    }
-
-    private void computeOverallScore() {
-        final TextView scoreView = (TextView) findViewById(R.id.score_text_view);
-        scoreView.setText("Computing score...");
-        new AsyncTask<Void, Void, Integer>()  {
-            @Override
-            protected Integer doInBackground(Void... voids) {
-                GlobalResultsStore gsr =
-                        GlobalResultsStore.getInstance(RunLocalBenchmarksActivity.this);
-                ArrayList<Double> testLevelScores = new ArrayList<>();
-                final SummaryStatistics stats = new SummaryStatistics();
-                for (LocalBenchmark b : mBenchmarksToRun) {
-                    HashMap<String, ArrayList<UiBenchmarkResult>> detailedResults =
-                            gsr.loadDetailedResults(mCurrentRunId);
-                    for (ArrayList<UiBenchmarkResult> testResult : detailedResults.values()) {
-                        for (UiBenchmarkResult res : testResult) {
-                            int score = res.getScore();
-                            if (score == 0) {
-                                score = 1;
-                            }
-                            stats.addValue(score);
-                        }
-
-                        testLevelScores.add(stats.getGeometricMean());
-                        stats.clear();
-                    }
-
-                }
-
-                for (double score : testLevelScores) {
-                    stats.addValue(score);
-                }
-
-                return (int)Math.round(stats.getGeometricMean());
-            }
-
-            @Override
-            protected void onPostExecute(Integer score) {
-                TextView view = (TextView)
-                        RunLocalBenchmarksActivity.this.findViewById(R.id.score_text_view);
-                view.setText("Score: " + score);
-            }
-        }.execute();
-    }
-
-    private void runNextBenchmark() {
-        LocalBenchmark benchmark = mBenchmarksToRun.get(mBenchmarkCursor);
-        boolean runAgain = false;
-
-        if (benchmark.runCount < benchmark.totalCount) {
-            runBenchmarkForId(mBenchmarksToRun.get(mBenchmarkCursor).id, benchmark.runCount++);
-        } else if (mBenchmarkCursor + 1 < mBenchmarksToRun.size()) {
-            mBenchmarkCursor++;
-            benchmark = mBenchmarksToRun.get(mBenchmarkCursor);
-            runBenchmarkForId(benchmark.id, benchmark.runCount++);
-        } else if (runAgain) {
-            mBenchmarkCursor = 0;
-            initLocalBenchmarks(getIntent());
-
-            runBenchmarkForId(mBenchmarksToRun.get(mBenchmarkCursor).id, benchmark.runCount);
-        } else if (mFinish) {
-            finish();
+        resumed = true;
+        if (resultReady) {
+            openResult();
         } else {
-            Log.i("BENCH", "BenchmarkDone!");
-            computeOverallScore();
-
-            new AsyncTask<Void, Void, Void>() {
-                boolean success;
-
-                @Override
-                protected Void doInBackground(Void... voids) {
-                    RunLocalBenchmarksActivity.this.runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            Toast.makeText(RunLocalBenchmarksActivity.this, "Uploading results...", Toast.LENGTH_LONG).show();
-                        }
-                    });
-
-                    success = JankBenchAPI.uploadResults(RunLocalBenchmarksActivity.this, Constants.BASE_URL); 
-
-                    return null;
-                }
-
-                @Override
-                protected void onPostExecute(Void aVoid) {
-                    RunLocalBenchmarksActivity.this.runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            Toast.makeText(RunLocalBenchmarksActivity.this, success ? "Upload succeeded" : "Upload failed", Toast.LENGTH_LONG).show();
-                        }
-                    });
-                }
-            }.execute();
-        }
-    }
-
-    private void runBenchmarkForId(int id, int iteration) {
-        Intent intent;
-        int syntheticTestId = -1;
-
-        System.out.println("iteration: " + iteration);
-
-        switch (id) {
-            case R.id.benchmark_list_view_scroll:
-                intent = new Intent(getApplicationContext(), ListViewScrollActivity.class);
-                break;
-            case R.id.benchmark_image_list_view_scroll:
-                intent = new Intent(getApplicationContext(), ImageListViewScrollActivity.class);
-                break;
-            case R.id.benchmark_shadow_grid:
-                intent = new Intent(getApplicationContext(), ShadowGridActivity.class);
-                break;
-            case R.id.benchmark_text_high_hitrate:
-                intent = new Intent(getApplicationContext(), TextScrollActivity.class);
-                intent.putExtra(TextScrollActivity.EXTRA_HIT_RATE, 80);
-                intent.putExtra(BenchmarkRegistry.EXTRA_ID, id);
-                break;
-            case R.id.benchmark_text_low_hitrate:
-                intent = new Intent(getApplicationContext(), TextScrollActivity.class);
-                intent.putExtra(TextScrollActivity.EXTRA_HIT_RATE, 20);
-                intent.putExtra(BenchmarkRegistry.EXTRA_ID, id);
-                break;
-            case R.id.benchmark_edit_text_input:
-                intent = new Intent(getApplicationContext(), EditTextInputActivity.class);
-                break;
-            case R.id.benchmark_overdraw:
-                intent = new Intent(getApplicationContext(), FullScreenOverdrawActivity.class);
-                break;
-            case R.id.benchmark_bitmap_upload:
-                intent = new Intent(getApplicationContext(), BitmapUploadActivity.class);
-                break;
-            case R.id.benchmark_memory_bandwidth:
-                syntheticTestId = 0;
-                intent = new Intent(getApplicationContext(), MemoryActivity.class);
-                intent.putExtra("test", syntheticTestId);
-                break;
-            case R.id.benchmark_memory_latency:
-                syntheticTestId = 1;
-                intent = new Intent(getApplicationContext(), MemoryActivity.class);
-                intent.putExtra("test", syntheticTestId);
-                break;
-            case R.id.benchmark_power_management:
-                syntheticTestId = 2;
-                intent = new Intent(getApplicationContext(), MemoryActivity.class);
-                intent.putExtra("test", syntheticTestId);
-                break;
-            case R.id.benchmark_cpu_heat_soak:
-                syntheticTestId = 3;
-                intent = new Intent(getApplicationContext(), MemoryActivity.class);
-                intent.putExtra("test", syntheticTestId);
-                break;
-            case R.id.benchmark_cpu_gflops:
-                syntheticTestId = 4;
-                intent = new Intent(getApplicationContext(), MemoryActivity.class);
-                intent.putExtra("test", syntheticTestId);
-                break;
-
-            default:
-               intent = null;
-        }
-
-        if (intent != null) {
-            intent.putExtra("com.android.benchmark.RUN_ID", mCurrentRunId);
-            intent.putExtra("com.android.benchmark.ITERATION", iteration);
-            startActivityForResult(intent, id & 0xffff, null);
+            scheduleStep();
         }
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
+    protected void onPause() {
+        resumed = false;
+        if (!isFinishing() && ending == null) {
+            end(Status.CANCELLED, "The benchmark left the foreground.");
+        }
+        super.onPause();
+    }
 
-        switch (requestCode) {
-            case R.id.benchmark_shadow_grid:
-            case R.id.benchmark_list_view_scroll:
-            case R.id.benchmark_image_list_view_scroll:
-            case R.id.benchmark_text_high_hitrate:
-            case R.id.benchmark_text_low_hitrate:
-            case R.id.benchmark_edit_text_input:
-                break;
-            default:
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        boolean lostFocus = focused && !hasFocus;
+        focused = hasFocus;
+        if (lostFocus && ending == null) {
+            end(Status.CANCELLED, "The benchmark window lost focus.");
+        } else if (hasFocus) {
+            scheduleStep();
         }
     }
 
-    class LocalBenchmarksListAdapter extends BaseAdapter {
-
-        private final LayoutInflater mInflater;
-
-        LocalBenchmarksListAdapter(LayoutInflater inflater) {
-            mInflater = inflater;
+    private void scheduleStep() {
+        if (resumed && focused && runId > 0 && ending == null && scene == null && !savingStep) {
+            main.removeCallbacks(launchStep);
+            main.postDelayed(launchStep, retryingCapture ? CAPTURE_RETRY_DELAY_MS : BETWEEN_STEPS_MS);
         }
+    }
 
-        @Override
-        public int getCount() {
-            return mBenchmarksToRun.size();
+    private void startStep() {
+        if (!resumed || !focused || ending != null || scene != null || savingStep) {
+            return;
         }
-
-        @Override
-        public Object getItem(int i) {
-            return mBenchmarksToRun.get(i);
+        BenchmarkTest test = tests.get(position / repetitions);
+        int round = 1 + position % repetitions;
+        progressLabel.setText(getString(R.string.run_progress,
+                position + 1, tests.size() * repetitions, round, repetitions));
+        workloadName.setText(test.title);
+        try {
+            scene = WorkloadViews.create(this, holder, test);
+            holder.addView(scene.view(), new FrameLayout.LayoutParams(-1, -1));
+            readyDeadline = SystemClock.uptimeMillis() + START_TIMEOUT_MS;
+            main.postDelayed(beginCapture, SETTLE_MS);
+        } catch (RuntimeException error) {
+            Log.w("JankBenchX", "Workload setup failed", error);
+            failStep("The workload could not be initialized.");
         }
+    }
 
-        @Override
-        public long getItemId(int i) {
-            return mBenchmarksToRun.get(i).id;
+    private void beginCapture() {
+        if (ending != null || scene == null) {
+            return;
         }
-
-        @Override
-        public View getView(int i, View convertView, ViewGroup parent) {
-            if (convertView == null) {
-                convertView = mInflater.inflate(R.layout.running_benchmark_list_item, null);
+        try {
+            View view = scene.view();
+            if (!view.isLaidOut() || view.isLayoutRequested()
+                    || view.getWidth() < 1 || view.getHeight() < 1 || !scene.workload().ready()) {
+                if (SystemClock.uptimeMillis() < readyDeadline) {
+                    main.postDelayed(beginCapture, 80);
+                } else {
+                    failStep("The workload did not become ready.");
+                }
+                return;
             }
-
-            TextView name = (TextView) convertView.findViewById(R.id.benchmark_name);
-            name.setText(BenchmarkRegistry.getBenchmarkName(
-                    RunLocalBenchmarksActivity.this, mBenchmarksToRun.get(i).id));
-            return convertView;
+            if (metricsThread == null) {
+                metricsThread = new HandlerThread("JankBench frame metrics");
+                metricsThread.start();
+            }
+            progress.setIndeterminate(false);
+            progress.setProgress(position);
+            automator = new Automator(getWindow(), view, scene.workload(),
+                    new Handler(metricsThread.getLooper()),
+                    () -> progress.setIndeterminate(true), this::onCaptureFinished);
+            automator.start();
+        } catch (RuntimeException error) {
+            Log.w("JankBenchX", "Workload preparation failed", error);
+            failStep("The workload could not be prepared.");
         }
+    }
 
+    private void onCaptureFinished(Automator.Result result) {
+        progress.setIndeterminate(true);
+        automator = null;
+        // Automator already closed the workload that produced this measurement.
+        scene = null;
+        holder.removeAllViews();
+        if (result.retryable() && !retryingCapture) {
+            retryingCapture = true;
+            progressLabel.setText(R.string.retrying_capture);
+            scheduleStep();
+        } else {
+            saveStep(result.measurement());
+        }
+    }
+
+    private void failStep(String error) {
+        progress.setIndeterminate(true);
+        clearScene();
+        saveStep(new Measurement(Collections.emptyList(), 0, 0, 0, 0, 0, error));
+    }
+
+    private void saveStep(Measurement measurement) {
+        savingStep = true;
+        int completedPosition = position;
+        RunStore store = RunStore.get(this);
+        RunStore.DISK.execute(() -> {
+            try {
+                boolean saved = store.saveStep(runId, completedPosition, measurement);
+                main.post(() -> {
+                    savingStep = false;
+                    if (ending != null) {
+                        return;
+                    }
+                    if (!saved) {
+                        end(Status.FAILED, "The workload result could not be saved.");
+                        return;
+                    }
+                    retryingCapture = false;
+                    position++;
+                    if (position == tests.size() * repetitions) {
+                        end(Status.COMPLETE, null);
+                    } else {
+                        scheduleStep();
+                    }
+                });
+            } catch (RuntimeException error) {
+                Log.e("JankBenchX", "Could not save a benchmark workload", error);
+                main.post(() -> end(Status.FAILED, "The workload result could not be saved."));
+            }
+        });
+    }
+
+    private void clearScene() {
+        if (automator != null) {
+            automator.close();
+            automator = null;
+        } else if (scene != null) {
+            scene.workload().close();
+        }
+        scene = null;
+        holder.removeAllViews();
+    }
+
+    private void end(Status status, String reason) {
+        if (ending != null) {
+            return;
+        }
+        ending = status;
+        endingReason = reason;
+        main.removeCallbacks(launchStep);
+        main.removeCallbacks(beginCapture);
+        clearScene();
+        if (metricsThread != null) {
+            metricsThread.quitSafely();
+            metricsThread = null;
+        }
+        cancelButton.setEnabled(false);
+        progress.setIndeterminate(true);
+        progressLabel.setText("Saving results");
+        finishOnDisk();
+    }
+
+    private void finishOnDisk() {
+        if (runId == 0 || finishingOnDisk) {
+            return;
+        }
+        finishingOnDisk = true;
+        RunStore store = RunStore.get(this);
+        RunStore.DISK.execute(() -> {
+            try {
+                store.finish(runId, ending, endingReason);
+                main.post(() -> {
+                    resultReady = true;
+                    openResult();
+                });
+            } catch (RuntimeException error) {
+                // Let the next database open recover an interrupted row after a storage failure.
+                try {
+                    store.close();
+                } catch (RuntimeException closeError) {
+                    error.addSuppressed(closeError);
+                }
+                main.post(() -> storageError("Could not finalize the benchmark result.", error));
+            }
+        });
+    }
+
+    private void openResult() {
+        if (!destroyed && !isFinishing() && resumed && resultReady) {
+            startActivity(new Intent(this, ResultsActivity.class)
+                    .putExtra(ResultsActivity.RUN_ID, runId));
+            finish();
+        }
+    }
+
+    private void storageError(String message, RuntimeException error) {
+        Log.e("JankBenchX", message, error);
+        if (!destroyed) {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            finish();
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle state) {
+        state.putLong(RUN_ID, runId);
+        super.onSaveInstanceState(state);
+    }
+
+    @Override
+    protected void onDestroy() {
+        destroyed = true;
+        if (ending == null && !isFinishing()) {
+            end(Status.CANCELLED, "The benchmark screen was interrupted.");
+        }
+        super.onDestroy();
     }
 }

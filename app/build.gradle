@@ -1,48 +1,46 @@
-apply plugin: 'com.android.application'
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.2.10'
+}
 
 android {
-    compileSdkVersion 29
-    buildToolsVersion "29.0.2"
+    namespace = 'com.android.benchmark'
+    compileSdk = 37
+    buildToolsVersion = '37.0.0'
+
     defaultConfig {
-        applicationId "com.android.benchmark"
-        minSdkVersion 24
-        targetSdkVersion 29
-        versionCode 6
-        versionName "2.2"
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        applicationId = 'com.android.benchmark'
+        minSdk = 26
+        targetSdk = 37
+        versionCode = 21
+        versionName = '3.5.8'
     }
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+    buildFeatures {
+        compose = true
+    }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    testOptions {
+        unitTests.includeAndroidResources = true
     }
 }
 
-repositories {
-    maven { url 'https://jitpack.io' }
-}
-
 dependencies {
-    implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'androidx.appcompat:appcompat:1.1.0'
-    implementation 'androidx.legacy:legacy-support-v4:1.0.0'
-    implementation 'com.google.android.material:material:1.0.0'
-    testImplementation 'junit:junit:4.12'
-
+    implementation platform('androidx.compose:compose-bom:2026.03.01')
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.activity:activity:1.12.4'
     implementation 'androidx.cardview:cardview:1.0.0'
-    implementation 'androidx.recyclerview:recyclerview:1.0.0'
-    implementation 'androidx.leanback:leanback:1.0.0'
-    implementation 'org.apache.commons:commons-math3:3.6'
-    implementation 'com.squareup.retrofit2:retrofit:2.1.0'
-    implementation 'com.squareup.retrofit2:converter-gson:2.1.0'
-
-    def libsuVersion = '2.5.1'
-    implementation "com.github.topjohnwu.libsu:core:${libsuVersion}"
-    implementation "com.github.topjohnwu.libsu:io:${libsuVersion}"
-    implementation "com.github.topjohnwu.libsu:busybox:${libsuVersion}"
+    implementation 'androidx.recyclerview:recyclerview:1.4.0'
+    implementation 'com.google.android.material:material:1.14.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16.1'
 }

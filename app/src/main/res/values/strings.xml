@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <!--
   ~ Copyright (C) 2015 The Android Open Source Project
   ~
@@ -13,43 +14,59 @@
   ~ License.
   ~
   -->
-
 <resources>
     <string name="app_name">JankBenchX</string>
-
-    <string name="action_export">Export to CSV</string>
-    <string name="action_upload">Upload Results</string>
-    <string name="action_view_results">View Results Online</string>
-
-    <string name="list_view_scroll_name">List View Fling</string>
-    <string name="list_view_scroll_description">Tests list view fling performance</string>
-    <string name="image_list_view_scroll_name">Image List View Fling</string>
-    <string name="image_list_view_scroll_description">Tests list view fling performance with images</string>
-    <string name="shadow_grid_name">Shadow Grid Fling</string>
-    <string name="shadow_grid_description">Tests shadow grid fling performance with images</string>
-    <string name="text_high_hitrate_name">High-hitrate text render</string>
-    <string name="text_high_hitrate_description">Tests high hitrate text rendering</string>
-    <string name="text_low_hitrate_name">Low-hitrate text render</string>
-    <string name="text_low_hitrate_description">Tests low-hitrate text rendering</string>
+    <string name="kernel_release">Kernel %1$s</string>
+    <string name="kernel_unavailable">Kernel unavailable</string>
+    <string name="list_view_scroll_name">List View Scroll</string>
+    <string name="image_list_view_scroll_name">Image List View Scroll</string>
+    <string name="shadow_grid_name">Shadow Grid Scroll</string>
+    <string name="text_high_hitrate_name">High Hit Rate Text</string>
+    <string name="text_low_hitrate_name">Low Hit Rate Text</string>
     <string name="edit_text_input_name">Edit Text Input</string>
-    <string name="edit_text_input_description">Tests edit text input</string>
-    <string name="overdraw_name">Overdraw Test</string>
-    <string name="overdraw_description">Tests how the device handles overdraw</string>
-    <string name="bitmap_upload_name">Bitmap Upload Test</string>
-    <string name="bitmap_upload_description">Tests bitmap upload</string>
-    <string name="memory_bandwidth_name">Memory Bandwidth</string>
-    <string name="memory_bandwidth_description">Test device\'s memory bandwidth</string>
-    <string name="memory_latency_name">Memory Latency</string>
-    <string name="memory_latency_description">Test device\'s memory latency</string>
-    <string name="power_management_name">Power Management</string>
-    <string name="power_management_description">Test device\'s power management</string>
-    <string name="cpu_heat_soak_name">CPU Heat Soak</string>
-    <string name="cpu_heat_soak_description">How hot can we make it?</string>
-    <string name="cpu_gflops_name">CPU GFlops</string>
-    <string name="cpu_gflops_description">How many gigaflops can the device attain?</string>
-
-    <string name="benchmark_category_ui">UI</string>
-    <string name="benchmark_category_compute">Compute</string>
-    <string name="benchmark_category_generic">Generic</string>
-    <string name="title_activity_image_list_view_scroll">ImageListViewScroll</string>
+    <string name="overdraw_name">Full-Screen Overdraw</string>
+    <string name="bitmap_upload_name">Bitmap Upload</string>
+    <string name="run_progress">Pass %1$d of %2$d  ·  Repetition %3$d of %4$d</string>
+    <string name="retrying_capture">Retrying frame capture…</string>
+    <string name="workloads">Workloads</string>
+    <string name="all_workloads">Select all</string>
+    <string name="repetitions_per_workload">Repetitions per workload</string>
+    <plurals name="repetition_count">
+        <item quantity="one">%d repetition</item>
+        <item quantity="other">%d repetitions</item>
+    </plurals>
+    <string name="view_feed_name">RecyclerView Image Feed</string>
+    <string name="compose_feed_name">Compose Image Feed</string>
+    <string name="nested_feed_name">Nested Photo Carousels</string>
+    <string name="detail_transition_name">Feed to Detail Transition</string>
+    <string name="live_feed_name">Live Feed Updates</string>
+    <string name="ui_dialog">Dialog List</string>
+    <string name="ui_gl_texture">GL TextureView</string>
+    <string name="ui_overdraw">Fullscreen Overdraw</string>
+    <string name="ui_invalidate">Invalidate</string>
+    <string name="ui_invalidate_tree">Invalidate Tree</string>
+    <string name="ui_resize_layer">Resize Hardware Layer</string>
+    <string name="ui_animation">Trivial Animation</string>
+    <string name="ui_wide_gamut">Wide-Gamut Animation</string>
+    <string name="ui_list">Trivial ListView</string>
+    <string name="ui_fading_list">Fading Edge ListView</string>
+    <string name="ui_save_layer">SaveLayer Animation</string>
+    <string name="ui_clipped_list">Clipped ListView</string>
+    <string name="ui_recycler">Trivial RecyclerView</string>
+    <string name="ui_slow_bind">Slow Bind RecyclerView</string>
+    <string name="ui_nested">Slow Nested RecyclerView</string>
+    <string name="ui_transition">Activity Transition</string>
+    <string name="ui_upload">Bitmap Upload</string>
+    <string name="ui_shadow">Shadow Grid</string>
+    <string name="ui_jitter">Rendering Jitter</string>
+    <string name="ui_inflate">Inflating ListView</string>
+    <string name="ui_edit">EditText Typing</string>
+    <string name="ui_text_low">Text Cache Low Hit Rate</string>
+    <string name="ui_text_high">Text Cache High Hit Rate</string>
+    <string name="ui_web">Scrollable WebView</string>
+    <string name="ui_drawer">Navigation Drawer</string>
+    <string name="ui_shade">Notification Shade Model</string>
+    <string name="ui_tv_browse">TV Browse Grid</string>
+    <string name="photo_gallery_name">Photo Gallery Fling</string>
+    <string name="ui_insets">Window Insets Layout</string>
 </resources>
