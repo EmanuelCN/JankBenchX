@@ -18,12 +18,17 @@ package com.android.benchmark.app;
 
 import android.content.Intent;
 import android.content.res.ColorStateList;
+import android.graphics.drawable.ClipDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -89,22 +94,29 @@ public class RunLocalBenchmarksActivity extends Screen {
         LinearLayout screen = createScreen();
         LinearLayout header = column();
         header.setPadding(dp(20), dp(16), dp(20), dp(10));
-        header.setBackgroundColor(surface);
+        header.setBackgroundColor(runnerColors.getHeader());
         LinearLayout bar = row();
-        progressLabel = text("Preparing benchmark", 14, muted, true);
+        progressLabel = text("Preparing benchmark", 14, runnerColors.getSupporting(), true);
         progressLabel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         bar.addView(progressLabel, new LinearLayout.LayoutParams(0, -2, 1));
-        cancelButton = action("Cancel", false);
+        cancelButton = cancelAction();
         cancelButton.setOnClickListener(view -> end(Status.CANCELLED, "Cancelled by the user."));
         bar.addView(cancelButton);
         header.addView(bar);
-        workloadName = text("JankBenchX", 20, ink, true);
+        workloadName = text("JankBenchX", 20, runnerColors.getTitle(), true);
         header.addView(workloadName);
         space(header, 8);
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setId(android.R.id.progress);
-        ColorStateList progressColor = ColorStateList.valueOf(primary);
-        progress.setProgressTintList(progressColor);
+        ColorStateList progressColor = ColorStateList.valueOf(runnerColors.getProgress());
+        // Keep the native progress view and its layout size separate from the measured viewport.
+        GradientDrawable track = progressSegment(runnerColors.getTrack());
+        ClipDrawable fill = new ClipDrawable(progressSegment(runnerColors.getProgress()),
+                Gravity.START, ClipDrawable.HORIZONTAL);
+        LayerDrawable progressDrawable = new LayerDrawable(new Drawable[]{track, fill});
+        progressDrawable.setId(0, android.R.id.background);
+        progressDrawable.setId(1, android.R.id.progress);
+        progress.setProgressDrawable(progressDrawable);
         progress.setIndeterminateTintList(progressColor);
         progress.setIndeterminate(true);
         header.addView(progress, new LinearLayout.LayoutParams(-1, dp(7)));
@@ -161,6 +173,13 @@ public class RunLocalBenchmarksActivity extends Screen {
                 main.post(() -> storageError("Could not start the benchmark.", error));
             }
         });
+    }
+
+    private GradientDrawable progressSegment(int color) {
+        GradientDrawable segment = new GradientDrawable();
+        segment.setColor(color);
+        segment.setCornerRadius(dp(4));
+        return segment;
     }
 
     @Override

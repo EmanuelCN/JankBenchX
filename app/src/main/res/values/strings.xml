@@ -27,6 +27,7 @@
     <string name="overdraw_name">Full-Screen Overdraw</string>
     <string name="bitmap_upload_name">Bitmap Upload</string>
     <string name="run_progress">Pass %1$d of %2$d  ·  Repetition %3$d of %4$d</string>
+    <string name="cancel_benchmark">Cancel</string>
     <string name="retrying_capture">Retrying frame capture…</string>
     <string name="workloads">Workloads</string>
     <string name="all_workloads">Select all</string>
