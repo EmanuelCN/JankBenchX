@@ -17,7 +17,6 @@
 package com.android.benchmark.app;
 
 import android.content.Intent;
-import android.content.res.ColorStateList;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -77,6 +76,7 @@ public class RunLocalBenchmarksActivity extends Screen {
     private TextView workloadName;
     private TextView progressLabel;
     private ProgressBar progress;
+    private WaveProgressDrawable progressWave;
     private View cancelButton;
     private Scene scene;
     private Automator automator;
@@ -88,26 +88,29 @@ public class RunLocalBenchmarksActivity extends Screen {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         LinearLayout screen = createScreen();
         LinearLayout header = column();
-        header.setPadding(dp(20), dp(16), dp(20), dp(10));
-        header.setBackgroundColor(surface);
+        int progressHeight = dp(14);
+        int progressGapDp = 4;
+        // Rebalance the space below the name without changing the workload viewport.
+        int progressArea = dp(8) + dp(7) + dp(10);
+        int bottomPadding = progressArea - progressHeight - dp(progressGapDp);
+        header.setPadding(dp(20), dp(16), dp(20), bottomPadding);
+        header.setBackgroundColor(runnerColors.getHeader());
         LinearLayout bar = row();
-        progressLabel = text("Preparing benchmark", 14, muted, true);
+        progressLabel = text("Preparing benchmark", 14, runnerColors.getSupporting(), true);
         progressLabel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         bar.addView(progressLabel, new LinearLayout.LayoutParams(0, -2, 1));
-        cancelButton = action("Cancel", false);
+        cancelButton = cancelAction();
         cancelButton.setOnClickListener(view -> end(Status.CANCELLED, "Cancelled by the user."));
         bar.addView(cancelButton);
         header.addView(bar);
-        workloadName = text("JankBenchX", 20, ink, true);
+        workloadName = text("JankBenchX", 20, runnerColors.getTitle(), true);
         header.addView(workloadName);
-        space(header, 8);
+        space(header, progressGapDp);
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setId(android.R.id.progress);
-        ColorStateList progressColor = ColorStateList.valueOf(primary);
-        progress.setProgressTintList(progressColor);
-        progress.setIndeterminateTintList(progressColor);
-        progress.setIndeterminate(true);
-        header.addView(progress, new LinearLayout.LayoutParams(-1, dp(7)));
+        progressWave = new WaveProgressDrawable(this, runnerColors.getProgress(), runnerColors.getTrack());
+        progress.setProgressDrawable(progressWave);
+        header.addView(progress, new LinearLayout.LayoutParams(-1, progressHeight));
         screen.addView(header);
 
         holder = new FrameLayout(this) {
@@ -164,6 +167,18 @@ public class RunLocalBenchmarksActivity extends Screen {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        progressWave.start();
+    }
+
+    @Override
+    protected void onStop() {
+        progressWave.stop();
+        super.onStop();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         resumed = true;
@@ -214,6 +229,8 @@ public class RunLocalBenchmarksActivity extends Screen {
         try {
             scene = WorkloadViews.create(this, holder, test);
             holder.addView(scene.view(), new FrameLayout.LayoutParams(-1, -1));
+            // Advance the marker during the next workload's settling period.
+            progress.setProgress(position);
             readyDeadline = SystemClock.uptimeMillis() + START_TIMEOUT_MS;
             main.postDelayed(beginCapture, SETTLE_MS);
         } catch (RuntimeException error) {
@@ -241,11 +258,8 @@ public class RunLocalBenchmarksActivity extends Screen {
                 metricsThread = new HandlerThread("JankBench frame metrics");
                 metricsThread.start();
             }
-            progress.setIndeterminate(false);
-            progress.setProgress(position);
             automator = new Automator(getWindow(), view, scene.workload(),
-                    new Handler(metricsThread.getLooper()),
-                    () -> progress.setIndeterminate(true), this::onCaptureFinished);
+                    new Handler(metricsThread.getLooper()), this::onCaptureFinished);
             automator.start();
         } catch (RuntimeException error) {
             Log.w("JankBenchX", "Workload preparation failed", error);
@@ -254,7 +268,6 @@ public class RunLocalBenchmarksActivity extends Screen {
     }
 
     private void onCaptureFinished(Automator.Result result) {
-        progress.setIndeterminate(true);
         automator = null;
         // Automator already closed the workload that produced this measurement.
         scene = null;
@@ -269,7 +282,6 @@ public class RunLocalBenchmarksActivity extends Screen {
     }
 
     private void failStep(String error) {
-        progress.setIndeterminate(true);
         clearScene();
         saveStep(new Measurement(Collections.emptyList(), 0, 0, 0, 0, 0, error));
     }
@@ -330,7 +342,6 @@ public class RunLocalBenchmarksActivity extends Screen {
             metricsThread = null;
         }
         cancelButton.setEnabled(false);
-        progress.setIndeterminate(true);
         progressLabel.setText("Saving results");
         finishOnDisk();
     }

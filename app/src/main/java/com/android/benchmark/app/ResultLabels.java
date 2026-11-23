@@ -7,6 +7,7 @@ import com.android.benchmark.results.RunStore.Run;
 import com.android.benchmark.results.RunStore.Status;
 
 import java.text.DateFormat;
+import java.text.NumberFormat;
 import java.util.Date;
 import java.util.Locale;
 
@@ -60,6 +61,15 @@ final class ResultLabels {
             case FAILED -> "Failed";
             case CANCELLED -> "Cancelled";
         };
+    }
+
+    static String peakRefresh(float max) {
+        if (!(max > 0)) {
+            return "Unavailable";
+        }
+        NumberFormat formatter = NumberFormat.getNumberInstance();
+        formatter.setMaximumFractionDigits(1);
+        return formatter.format(max) + " Hz";
     }
 
     static String refresh(float min, float max) {

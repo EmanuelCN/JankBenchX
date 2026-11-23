@@ -55,7 +55,6 @@ public final class Automator implements AutoCloseable {
     private final View workloadView;
     private final Workload workload;
     private final Handler metricsHandler;
-    private final Runnable onTimingEnded;
     private final Consumer<Result> result;
     private final DisplayManager displays;
     private final Choreographer.FrameCallback frameCallback = this::frame;
@@ -76,12 +75,11 @@ public final class Automator implements AutoCloseable {
     };
 
     public Automator(Window window, View workloadView, Workload workload,
-                     Handler metricsHandler, Runnable onTimingEnded, Consumer<Result> result) {
+                     Handler metricsHandler, Consumer<Result> result) {
         this.window = window;
         this.workloadView = workloadView;
         this.workload = workload;
         this.metricsHandler = metricsHandler;
-        this.onTimingEnded = onTimingEnded;
         this.result = result;
         displays = window.getContext().getSystemService(DisplayManager.class);
     }
@@ -120,8 +118,6 @@ public final class Automator implements AutoCloseable {
                 collector.end(frameTime, capture -> main.post(() -> finish(capture)));
                 // A subsequent draw gives the timing listener an end marker outside the sample.
                 workloadView.postInvalidateOnAnimation();
-                // Start handoff UI in the next vsync, after the last measured frame.
-                workloadView.postOnAnimation(onTimingEnded);
             } else {
                 choreographer.postFrameCallback(frameCallback);
             }
@@ -169,7 +165,6 @@ public final class Automator implements AutoCloseable {
         closed = true;
         main.removeCallbacksAndMessages(null);
         choreographer.removeFrameCallback(frameCallback);
-        workloadView.removeCallbacks(onTimingEnded);
         if (collector != null) {
             displays.unregisterDisplayListener(displayListener);
             collector.close();
